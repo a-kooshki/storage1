@@ -80,12 +80,13 @@ const Button = ({ children, onClick, className = '', ...props }) => (
   </button>
 );
 
-const Select = ({ name, value, onChange, children }) => (
+const Select = ({ name, value, onChange, children, ...props }) => (
   <select
     name={name}
     value={value}
     onChange={(e) => onChange(e.target.value)}
     className="w-full px-3 py-2 border border-gray-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+    {...props}
   >
     {children}
   </select>
@@ -117,25 +118,25 @@ const prepareSearchResults = (stones) => {
   return Object.values(groupedByPallet);
 };
 
+const createEntryRow = (defaults = {}) => ({
+  id: `draft-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  palletNumber: defaults.palletNumber || '',
+  type: defaults.type || '',
+  cutCode: defaults.cutCode || '',
+  grade: defaults.grade || '',
+  thickness: defaults.thickness || '',
+  length: '',
+  width: '',
+  quantity: '1',
+  notes: '',
+});
+
 
 
 export default function StoneInventoryApp() {
   const [activeTab, setActiveTab] = useState('input');
   const [stoneTypes, setStoneTypes] = useState(['Granite', 'Marble', 'Limestone']);
   const [newStoneType, setNewStoneType] = useState('');
-  const [formData, setFormData] = useState({
-    type: '',
-    cutCode: '',
-    palletNumber: '',
-    grade: '',
-    thickness: '',
-    length: '',
-    width: '',
-    quantity: '',
-    area: '',
-    notes: '',
-    status: 'در انبار'
-  });
   const [stones, setStones] = useState([]);
   const [filters, setFilters] = useState({
     showSold: false,
@@ -171,14 +172,19 @@ export default function StoneInventoryApp() {
     grade: '',
     thickness: '',
   });
+  const [entryRows, setEntryRows] = useState(() => [createEntryRow()]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
 
   const persistData = async (dataToSave) => {
     try {
       if (window.electronAPI) {
         await window.electronAPI.saveData(dataToSave);
+        setLastUpdatedAt(new Date());
         return;
       }
       localStorage.setItem('stone-inventory-data', JSON.stringify(dataToSave));
+      setLastUpdatedAt(new Date());
     } catch (error) {
       console.error('Failed to save inventory data:', error);
     }
@@ -218,6 +224,8 @@ export default function StoneInventoryApp() {
         }
       } catch (error) {
         console.error('Failed to load inventory data:', error);
+      } finally {
+        setIsLoading(false);
       }
     };
 
@@ -226,6 +234,7 @@ export default function StoneInventoryApp() {
 
   // ذخیره‌سازی سریع بعد از تغییرات
   useEffect(() => {
+    if (isLoading) return undefined;
     const dataToSave = {
       stones: Array.isArray(stones) ? stones : [],
       stoneTypes: Array.isArray(stoneTypes) ? stoneTypes : ['Granite', 'Marble', 'Limestone'],
@@ -236,7 +245,7 @@ export default function StoneInventoryApp() {
     }, 300);
 
     return () => clearTimeout(timeout);
-  }, [stones, stoneTypes, settings]);
+  }, [stones, stoneTypes, settings, isLoading]);
 
   // ذخیره‌سازی نهایی هنگام بستن/ریلـود
   useEffect(() => {
@@ -278,110 +287,90 @@ export default function StoneInventoryApp() {
     return `${match[1]}-${match[2]}`;
   };
 
-  const handleFormChange = (e) => {
-    const { name, value } = e.target;
-
-    if (e.type === 'change') {
-      if (name === 'palletNumber') {
-        const normalized = normalizePalletInput(value);
-        setFormData(prev => ({ ...prev, palletNumber: normalized }));
-        return;
-      }
-
-      setFormData(prev => {
-        const newData = { ...prev, [name]: value };
-
-        if (name === 'length' || name === 'width' || name === 'quantity') {
-          const length = parseFloat(newData.length) || 0;
-          const width = parseFloat(newData.width) || 0;
-          const quantity = parseFloat(newData.quantity) || 0;
-          newData.area = (length * width * quantity).toFixed(2);
-        }
-
-        return newData;
-      });
-    } else if (e.type === 'blur') {
-      setFormData(prev => {
-        const newData = { ...prev, [name]: value };
-
-        if (name === 'thickness' || name === 'length' || name === 'width') {
-          const numericValue = parseFloat(value);
-          if (!isNaN(numericValue)) {
-            newData[name] = (numericValue / 100).toFixed(2);
-          }
-        }
-
-        if (name === 'length' || name === 'width' || name === 'quantity') {
-          const length = parseFloat(newData.length) || 0;
-          const width = parseFloat(newData.width) || 0;
-          const quantity = parseFloat(newData.quantity) || 0;
-
-          if (width > length && length > 0 && width > 0) {
-            newData.length = width;
-            newData.width = length;
-          }
-
-          const area = (length * width * quantity).toFixed(2);
-          newData.area = area;
-        }
-
-        if (name === 'palletNumber') {
-          newData.palletNumber = formatPalletOnBlur(value);
-        }
-
-        return newData;
-      });
-    }
+  const updateEntryRow = (id, field, value) => {
+    setEntryRows((rows) => rows.map((row) => {
+      if (row.id !== id) return row;
+      const next = { ...row, [field]: value };
+      if (field === 'palletNumber') next.palletNumber = normalizePalletInput(value);
+      return next;
+    }));
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
+  const formatEntryPallet = (id) => {
+    setEntryRows((rows) => rows.map((row) => row.id === id
+      ? { ...row, palletNumber: formatPalletOnBlur(row.palletNumber) }
+      : row));
+  };
 
-    if (!/^[A-Z]-\d{1,3}$/.test(formData.palletNumber)) {
-      alert('فرمت شماره پالت باید مثل A-123 باشد.');
+  const addEntryRow = (seed = {}) => {
+    setEntryRows((rows) => [...rows, createEntryRow({
+      palletNumber: seed.palletNumber || rows.at(-1)?.palletNumber,
+      type: seed.type || rows.at(-1)?.type || lastEntryDefaults.type,
+      cutCode: seed.cutCode || lastEntryDefaults.cutCode,
+      grade: seed.grade || rows.at(-1)?.grade || lastEntryDefaults.grade,
+      thickness: seed.thickness || rows.at(-1)?.thickness || lastEntryDefaults.thickness,
+    })]);
+  };
+
+  const removeEntryRow = (id) => {
+    setEntryRows((rows) => rows.length === 1 ? [createEntryRow()] : rows.filter((row) => row.id !== id));
+  };
+
+  const saveEntryRows = () => {
+    const rowsToSave = entryRows.filter((row) => [row.palletNumber, row.type, row.cutCode, row.grade, row.thickness, row.length, row.width, row.notes].some((value) => String(value || '').trim() !== ''));
+    const errors = rowsToSave.filter((row) => (
+      !/^[A-Z]-\d{1,3}$/.test(formatPalletOnBlur(row.palletNumber))
+      || !row.type || row.cutCode === '' || !row.length || !row.width || !row.quantity
+      || Number(row.length) <= 0 || Number(row.width) <= 0 || Number(row.quantity) <= 0
+    ));
+
+    if (rowsToSave.length === 0) {
+      alert('حداقل یک ردیف را کامل کنید.');
+      return;
+    }
+    if (errors.length > 0) {
+      alert(`اطلاعات ${errors.length} ردیف کامل یا معتبر نیست. شماره پالت را مانند A-123 وارد کنید.`);
       return;
     }
 
-    const palletInvoiceNumber = getPalletInvoice(formData.palletNumber);
+    const now = Date.now();
+    const newStones = rowsToSave.map((row, index) => {
+      const length = Number(row.length) / 100;
+      const width = Number(row.width) / 100;
+      const quantity = Number(row.quantity);
+      const palletNumber = formatPalletOnBlur(row.palletNumber);
+      return {
+        ...row,
+        id: `${now}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+        palletNumber,
+        invoiceNumber: getPalletInvoice(palletNumber),
+        thickness: row.thickness === '' ? 0 : Number(row.thickness) / 100,
+        length: Math.max(length, width),
+        width: Math.min(length, width),
+        quantity,
+        area: Number((length * width * quantity).toFixed(2)),
+        createdAt: new Date().toISOString(),
+      };
+    });
 
-    const newStone = {
-      ...formData,
-      invoiceNumber: palletInvoiceNumber,
-      id: Date.now().toString(),
-      thickness: parseFloat(formData.thickness),
-      length: parseFloat(formData.length),
-      width: parseFloat(formData.width),
-      quantity: parseInt(formData.quantity),
-      area: parseFloat(formData.area)
-    };
-
-    if (settings.enableFormDefaults) {
-      setLastEntryDefaults({
-        type: formData.type,
-        cutCode: formData.cutCode,
-        grade: formData.grade,
-        thickness: formData.thickness,
-      });
-    }
-
-    setStones([...normalizedStones, newStone]);
-    resetForm();
+    setStones((current) => [...newStones, ...current]);
+    const lastRow = rowsToSave.at(-1);
+    setLastEntryDefaults({ type: lastRow.type, cutCode: lastRow.cutCode, grade: lastRow.grade, thickness: lastRow.thickness });
+    setEntryRows([createEntryRow({ ...lastRow, palletNumber: formatPalletOnBlur(lastRow.palletNumber) })]);
+    alert(`${newStones.length} آیتم با موفقیت ثبت شد.`);
   };
 
-  const resetForm = () => {
-    setFormData(prev => ({
-      type: settings.enableFormDefaults ? lastEntryDefaults.type : '',
-      cutCode: settings.enableFormDefaults ? lastEntryDefaults.cutCode : '',
-      palletNumber: prev.palletNumber,
-      grade: settings.enableFormDefaults ? lastEntryDefaults.grade : '',
-      thickness: settings.enableFormDefaults ? lastEntryDefaults.thickness : '',
-      length: '',
-      width: '',
-      quantity: '',
-      area: '',
-      notes: '',
-      status: 'در انبار'
-    }));
+  const handleEntryKeyDown = (event, rowIndex, fieldIndex) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const row = entryRows[rowIndex];
+    const fieldNames = ['palletNumber', 'type', 'cutCode', 'grade', 'thickness', 'length', 'width', 'quantity', 'notes'];
+    if (fieldIndex === fieldNames.length - 1) {
+      addEntryRow(row);
+      requestAnimationFrame(() => document.querySelector(`[data-entry-row="${rowIndex + 1}"][data-entry-field="0"] input, [data-entry-row="${rowIndex + 1}"][data-entry-field="0"] select`)?.focus());
+      return;
+    }
+    document.querySelector(`[data-entry-row="${rowIndex}"][data-entry-field="${fieldIndex + 1}"] input, [data-entry-row="${rowIndex}"][data-entry-field="${fieldIndex + 1}"] select`)?.focus();
   };
 
   const normalizedStones = Array.isArray(stones) ? stones : [];
@@ -389,26 +378,6 @@ export default function StoneInventoryApp() {
     ? stoneTypes
     : ['Granite', 'Marble', 'Limestone'];
 
-  const currentPalletCode = /^[A-Z]-\d{1,3}$/.test(formData.palletNumber)
-    ? formData.palletNumber
-    : null;
-  const currentPalletStones = currentPalletCode
-    ? normalizedStones.filter((stone) => stone.palletNumber === currentPalletCode)
-    : [];
-  const currentPalletArea = currentPalletStones
-    .reduce((sum, stone) => sum + Number(stone.area || 0), 0)
-    .toFixed(2);
-
-  const currentPalletInvoice = (() => {
-    const invoices = [...new Set(
-      currentPalletStones
-        .map((stone) => String(stone.invoiceNumber || '').trim())
-        .filter(Boolean)
-    )];
-
-    if (invoices.length > 0) return invoices[0];
-    return '';
-  })();
 
 
   function getPalletInvoice(palletNumber) {
@@ -457,6 +426,10 @@ export default function StoneInventoryApp() {
     if (filters.maxWidth && width > parseFloat(filters.maxWidth)) return false;
 
     return true;
+  }).sort((a, b) => {
+    const aTime = Date.parse(a.createdAt) || Number(a.id) || 0;
+    const bTime = Date.parse(b.createdAt) || Number(b.id) || 0;
+    return bTime - aTime;
   });
 
   const totalFilteredArea = filteredStones.reduce((sum, stone) => sum + stone.area, 0).toFixed(2);
@@ -507,6 +480,13 @@ export default function StoneInventoryApp() {
     return text;
   };
 
+  const escapeHtml = (value) => normalizePdfText(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+
   const loadLogoDataUrl = async () => {
     const logoCandidates = ['./logo.png', '/logo.png', './build/logo.png'];
 
@@ -536,7 +516,7 @@ export default function StoneInventoryApp() {
 
   const loadQrDataUrl = async () => {
     try {
-      return await QRCode.toDataURL('agse.ir', {
+    return await QRCode.toDataURL('https://agse.ir/', {
         width: 165,
         margin: 1,
         color: { dark: '#000000', light: '#FFFFFF' },
@@ -575,9 +555,9 @@ export default function StoneInventoryApp() {
     const numericFontSize = Math.round(tableFontSize * 1.25);
     const cellPadding = Math.max(2, Math.round(2 * fontScale));
 
-    const headersHtml = headers.map((header) => `<th style=\"border:2px solid ${borderColor};padding:${cellPadding}px;background:${headerBg};color:${headerColor};font-weight:900;word-break:break-word;white-space:nowrap\">${normalizePdfText(header)}</th>`).join('');
+    const headersHtml = headers.map((header) => `<th style="border:2px solid ${borderColor};padding:${cellPadding}px;background:${headerBg};color:${headerColor};font-weight:900;word-break:break-word;white-space:nowrap">${escapeHtml(header)}</th>`).join('');
     const rowsHtml = rows.map((row) => (
-      `<tr>${row.map((cell) => { const text = normalizePdfText(cell); const isNumeric = /^[-+]?\d+(?:[.,]\d+)?$/.test(String(text).trim()); return `<td style=\"border:2px solid ${borderColor};padding:${cellPadding}px;word-break:break-word;font-weight:${isNumeric ? 900 : 700};font-size:${isNumeric ? numericFontSize : tableFontSize}px\">${text}</td>`; }).join('')}</tr>`
+      `<tr>${row.map((cell) => { const text = escapeHtml(cell); const isNumeric = /^[-+]?\d+(?:[.,]\d+)?$/.test(String(text).trim()); return `<td style="border:2px solid ${borderColor};padding:${cellPadding}px;word-break:break-word;font-weight:${isNumeric ? 900 : 700};font-size:${isNumeric ? numericFontSize : tableFontSize}px">${text}</td>`; }).join('')}</tr>`
     )).join('');
 
     const logoHtml = logoDataUrl
@@ -592,12 +572,12 @@ export default function StoneInventoryApp() {
       <div dir="ltr" style="font-family:'Vazirmatn','Tahoma','Segoe UI',Arial,sans-serif;padding:16px;color:#111;background:#fff">
         <div style="display:flex;justify-content:space-between;align-items:center;direction:ltr;margin-bottom:8px;gap:12px">
           <div>${logoHtml}</div>
-          <div style="flex:1;text-align:center;font-size:${Math.round(18 * fontScale)}px;font-weight:800">${normalizePdfText(headerText || '-')}</div>
+          <div style="flex:1;text-align:center;font-size:${Math.round(18 * fontScale)}px;font-weight:800">${escapeHtml(headerText || '-')}</div>
           <div>${qrHtml}</div>
         </div>
-        <h2 style="text-align:center;margin:0 0 10px 0;font-size:${titleFontSize}px;font-weight:900">${normalizePdfText(title)}</h2>
-        <p style="text-align:center;margin:0 0 14px 0;font-size:${subtitleFontSize}px;font-weight:800">${normalizePdfText(subtitle)}</p>
-        <table style=\"width:100%;border-collapse:collapse;font-size:${tableFontSize}px;text-align:center;direction:ltr;font-weight:800;table-layout:auto\">
+        <h2 style="text-align:center;margin:0 0 10px 0;font-size:${titleFontSize}px;font-weight:900">${escapeHtml(title)}</h2>
+        <p style="text-align:center;margin:0 0 14px 0;font-size:${subtitleFontSize}px;font-weight:800">${escapeHtml(subtitle)}</p>
+        <table style="width:100%;border-collapse:collapse;font-size:${tableFontSize}px;text-align:center;direction:ltr;font-weight:800;table-layout:auto">
           <thead><tr>${headersHtml}</tr></thead>
           <tbody>${rowsHtml}</tbody>
         </table>
@@ -647,8 +627,13 @@ export default function StoneInventoryApp() {
       }
     }
 
-    const blobUrl = doc.output('bloburl');
-    window.open(blobUrl, '_blank', 'noopener,noreferrer');
+    const blob = doc.output('blob');
+    const blobUrl = URL.createObjectURL(blob);
+    const download = document.createElement('a');
+    download.href = blobUrl;
+    download.download = fileName || 'stone-inventory.pdf';
+    download.click();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
   };
 
   const generatePalletPDF = async () => {
@@ -768,20 +753,6 @@ export default function StoneInventoryApp() {
     }
   };
 
-  const editStone = (id) => {
-    const stoneToEdit = normalizedStones.find(stone => stone.id === id);
-    if (stoneToEdit) {
-      setFormData({ ...stoneToEdit });
-      setStones(normalizedStones.filter(stone => stone.id !== id));
-      setActiveTab('input');
-    }
-  };
-
-  const deleteStone = (id) => {
-    if (window.confirm('از حذف این سنگ مطمئن هستید؟')) {
-      setStones(normalizedStones.filter(stone => stone.id !== id));
-    }
-  };
 
 
   const editPallet = (palletNumber) => {
@@ -789,14 +760,13 @@ export default function StoneInventoryApp() {
     if (palletItems.length === 0) return;
 
     const sampleStone = palletItems[0];
-    setFormData(prev => ({
-      ...prev,
+    setEntryRows([createEntryRow({
       palletNumber,
-      type: sampleStone.type || prev.type,
-      cutCode: sampleStone.cutCode || prev.cutCode,
-      grade: sampleStone.grade || prev.grade,
-      thickness: sampleStone.thickness ? String(sampleStone.thickness) : prev.thickness,
-    }));
+      type: sampleStone.type || '',
+      cutCode: sampleStone.cutCode || '',
+      grade: sampleStone.grade || '',
+      thickness: sampleStone.thickness ? String(Number(sampleStone.thickness) * 100) : '',
+    })]);
     setActiveTab('input');
   };
 
@@ -938,205 +908,54 @@ export default function StoneInventoryApp() {
       <h1 className="text-2xl font-bold mb-6 text-center text-blue-400">مدیریت موجودی سنگ</h1>
 
       <Tabs defaultValue="input" value={activeTab} onValueChange={setActiveTab}>
-        <TabsContent value="input" label="فرم ورود اطلاعات">
-          <div className="bg-gray-800 p-6 rounded-lg shadow-lg">
-            <h2 className="text-xl font-semibold mb-4 text-blue-300">فرم اطلاعات سنگ</h2>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">شماره پالت (مثال: A-123)</label>
-                  <Input
-                    name="palletNumber"
-                    value={formData.palletNumber}
-                    onChange={handleFormChange}
-                    onBlur={handleFormChange}
-                    placeholder="A123"
-                    pattern="[A-Z]-?[0-9]{1,3}"
-                    title="فرمت معتبر: A-123 یا Z-1"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">نوع سنگ</label>
-                  <Select name="type" value={formData.type} onChange={(value) => setFormData(prev => ({...prev, type: value}))} required>
-                    <option value="" disabled>نوع سنگ را انتخاب کنید</option>
-                    {normalizedStoneTypes.map(type => (
-                      <option key={type} value={type}>{type}</option>
-                    ))}
-                  </Select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">شماره برش (0 تا 999)</label>
-                  <Input
-                    type="number"
-                    name="cutCode"
-                    value={formData.cutCode}
-                    onChange={handleFormChange}
-                    min="0"
-                    max="999"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">درجه</label>
-                  <Input
-                    name="grade"
-                    value={formData.grade}
-                    onChange={handleFormChange}
-                    maxLength="1"
-                    className="uppercase"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">ضخامت (سانتی‌متر)</label>
-                  <Input
-                    type="number"
-                    name="thickness"
-                    value={formData.thickness}
-                    onChange={handleFormChange}
-                    onBlur={handleFormChange}
-                    step="0.01"
-                  />
-                </div>
-
-                <div className="md:col-span-2 lg:col-span-3">
-                  <label className="block text-sm font-medium mb-2">ابعاد و تعداد</label>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <div>
-                      <label className="block text-xs text-gray-300 mb-1">طول (سانتی‌متر)</label>
-                      <Input
-                        type="number"
-                        name="length"
-                        value={formData.length}
-                        onChange={handleFormChange}
-                        onBlur={handleFormChange}
-                        step="0.01"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-300 mb-1">عرض (سانتی‌متر)</label>
-                      <Input
-                        type="number"
-                        name="width"
-                        value={formData.width}
-                        onChange={handleFormChange}
-                        onBlur={handleFormChange}
-                        step="0.01"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-300 mb-1">تعداد</label>
-                      <Input
-                        type="number"
-                        name="quantity"
-                        value={formData.quantity}
-                        onChange={handleFormChange}
-                        onBlur={handleFormChange}
-                        min="1"
-                        required
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">متراژ (متر مربع)</label>
-                  <Input
-                    type="text"
-                    name="area"
-                    value={formData.area}
-                    readOnly
-                    className="cursor-not-allowed bg-gray-700"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">یادداشت</label>
-                  <Input
-                    name="notes"
-                    value={formData.notes}
-                    onChange={handleFormChange}
-                  />
-                </div>
+        <TabsContent value="input" label="ثبت سریع">
+          <div className="bg-gray-800 p-4 md:p-6 rounded-lg shadow-lg">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-5">
+              <div>
+                <h2 className="text-xl font-semibold text-blue-300">ثبت سریع آیتم‌های سنگ</h2>
+                <p className="text-sm text-gray-300 mt-1">هر ردیف یک آیتم است؛ با Enter بین خانه‌ها حرکت کنید و در انتهای ردیف، ردیف بعدی ساخته می‌شود. ابعاد و ضخامت را به سانتی‌متر وارد کنید.</p>
               </div>
-
-
-              <div className="flex justify-end space-x-4 mt-6">
-                <Button type="button" onClick={resetForm} className="bg-gray-600 hover:bg-gray-500">
-                  پاک کردن
-                </Button>
-                <Button type="submit" className="bg-blue-600 hover:bg-blue-500">
-                  ذخیره سنگ
-                </Button>
-              </div>
-            </form>
-
-            <div className="mt-6 border border-gray-600 rounded-lg p-4 bg-gray-700/60">
-              <h3 className="text-lg font-bold text-blue-300 mb-2">مشاهده اطلاعات پالت جاری</h3>
-              <p className="text-sm mb-3">
-                شماره پالت: <span className="font-semibold">{currentPalletCode || '---'}</span>
-                {' | '}
-                تعداد آیتم‌ها: <span className="font-semibold">{currentPalletStones.length}</span>
-                {' | '}
-                متراژ کل: <span className="font-semibold">{currentPalletArea} m²</span>
-                {' | '}
-                شماره فاکتور پالت: <span className="font-semibold">{currentPalletInvoice || '---'}</span>
-              </p>
-
-              {currentPalletStones.length > 0 ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>نوع سنگ</TableHead>
-                      <TableHead>کد برش</TableHead>
-                      <TableHead>درجه</TableHead>
-                      <TableHead>ضخامت</TableHead>
-                      <TableHead>طول</TableHead>
-                      <TableHead>عرض</TableHead>
-                      <TableHead>تعداد</TableHead>
-                      <TableHead>متراژ</TableHead>
-                      <TableHead>عملیات</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {currentPalletStones.map((stone) => (
-                      <TableRow key={stone.id}>
-                        <TableCell>{stone.type}</TableCell>
-                        <TableCell>{stone.cutCode}</TableCell>
-                        <TableCell>{stone.grade}</TableCell>
-                        <TableCell>{Number(stone.thickness).toFixed(2)}</TableCell>
-                        <TableCell>{Number(stone.length).toFixed(2)}</TableCell>
-                        <TableCell>{Number(stone.width).toFixed(2)}</TableCell>
-                        <TableCell>{stone.quantity}</TableCell>
-                        <TableCell>{Number(stone.area).toFixed(2)}</TableCell>
-                        <TableCell className="space-x-2">
-                          <Button size="sm" onClick={() => editStone(stone.id)} className="bg-yellow-600 hover:bg-yellow-500 px-2 py-1 text-xs">
-                            ویرایش
-                          </Button>
-                          <Button size="sm" onClick={() => deleteStone(stone.id)} className="bg-red-600 hover:bg-red-500 px-2 py-1 text-xs">
-                            حذف
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : (
-                <p className="text-sm text-gray-300">برای این پالت هنوز آیتمی ثبت نشده است.</p>
-              )}
+              <div className="text-xs text-gray-400">{isLoading ? 'در حال بارگذاری اطلاعات…' : lastUpdatedAt ? `آخرین ذخیره: ${lastUpdatedAt.toLocaleTimeString('fa-IR')}` : 'ذخیره‌سازی خودکار فعال است'}</div>
+            </div>
+            <div className="overflow-x-auto border border-gray-600 rounded-lg">
+              <table className="w-full min-w-[1150px] text-sm">
+                <thead className="bg-gray-700 text-gray-200">
+                  <tr>
+                    {['پالت', 'نوع سنگ', 'برش', 'درجه', 'ضخامت (cm)', 'طول (cm)', 'عرض (cm)', 'تعداد', 'یادداشت', 'متراژ', ''].map((label) => <th key={label} className="p-2 text-right font-medium">{label}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {entryRows.map((row, rowIndex) => {
+                    const area = ((Number(row.length || 0) * Number(row.width || 0) * Number(row.quantity || 0)) / 10000).toFixed(2);
+                    const cells = [
+                      <Input key="pallet" name="palletNumber" value={row.palletNumber} onChange={(e) => updateEntryRow(row.id, 'palletNumber', e.target.value)} onBlur={() => formatEntryPallet(row.id)} placeholder="A-123" />,
+                      <Select key="type" value={row.type} onChange={(value) => updateEntryRow(row.id, 'type', value)}><option value="">انتخاب کنید</option>{normalizedStoneTypes.map((type) => <option key={type} value={type}>{type}</option>)}</Select>,
+                      <Input key="cut" type="number" value={row.cutCode} onChange={(e) => updateEntryRow(row.id, 'cutCode', e.target.value)} min="0" max="999" />,
+                      <Input key="grade" value={row.grade} onChange={(e) => updateEntryRow(row.id, 'grade', e.target.value.toUpperCase())} maxLength="1" />,
+                      <Input key="thickness" type="number" value={row.thickness} onChange={(e) => updateEntryRow(row.id, 'thickness', e.target.value)} min="0" step="0.01" />,
+                      <Input key="length" type="number" value={row.length} onChange={(e) => updateEntryRow(row.id, 'length', e.target.value)} min="0" step="0.01" />,
+                      <Input key="width" type="number" value={row.width} onChange={(e) => updateEntryRow(row.id, 'width', e.target.value)} min="0" step="0.01" />,
+                      <Input key="quantity" type="number" value={row.quantity} onChange={(e) => updateEntryRow(row.id, 'quantity', e.target.value)} min="1" step="1" />,
+                      <Input key="notes" value={row.notes} onChange={(e) => updateEntryRow(row.id, 'notes', e.target.value)} placeholder="اختیاری" />,
+                    ];
+                    return <tr key={row.id} className="border-t border-gray-700 align-top">{cells.map((cell, fieldIndex) => <td key={fieldIndex} className="p-1"><div data-entry-row={rowIndex} data-entry-field={fieldIndex} onKeyDown={(e) => handleEntryKeyDown(e, rowIndex, fieldIndex)}>{cell}</div></td>)}<td className="p-2 text-blue-300 font-semibold whitespace-nowrap">{area} m²</td><td className="p-1"><Button type="button" onClick={() => removeEntryRow(row.id)} className="bg-red-700 hover:bg-red-600 px-2 py-2 text-xs" aria-label="حذف ردیف">×</Button></td></tr>;
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex flex-wrap justify-between gap-3 mt-4">
+              <Button type="button" onClick={() => addEntryRow()} className="bg-gray-600 hover:bg-gray-500">+ افزودن ردیف</Button>
+              <div className="flex gap-2"><Button type="button" onClick={() => setEntryRows([createEntryRow()])} className="bg-gray-600 hover:bg-gray-500">پاک‌کردن جدول</Button><Button type="button" onClick={saveEntryRows} className="bg-blue-600 hover:bg-blue-500">ثبت همه ردیف‌ها</Button></div>
             </div>
           </div>
         </TabsContent>
 
         <TabsContent value="search" label="جستجو و بازبینی">
           <div className="bg-gray-800 p-6 rounded-lg shadow-lg">
-            <h2 className="text-xl font-semibold mb-4 text-blue-300">جستجو و بازبینی سنگ‌ها</h2>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+              <div><h2 className="text-xl font-semibold text-blue-300">جستجو و بازبینی سنگ‌ها</h2><p className="text-sm text-gray-300 mt-1">نتایج بر اساس جدیدترین ثبت مرتب شده‌اند.</p></div>
+              <span className="rounded-full bg-blue-900/70 px-3 py-1 text-xs text-blue-200">{isLoading ? 'در حال همگام‌سازی…' : lastUpdatedAt ? `به‌روزرسانی: ${lastUpdatedAt.toLocaleTimeString('fa-IR')}` : 'اطلاعات آماده است'}</span>
+            </div>
 
             {/* فیلترها */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">

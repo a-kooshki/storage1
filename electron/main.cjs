@@ -17,7 +17,7 @@ async function readDataFile() {
     return JSON.parse(raw);
   } catch (error) {
     if (error.code === 'ENOENT') {
-      return { stones: [], stoneTypes: ['Granite', 'Marble', 'Limestone'] };
+      return { stones: [], stoneTypes: ['Granite', 'Marble', 'Limestone'], settings: {} };
     }
     throw error;
   }
@@ -25,7 +25,14 @@ async function readDataFile() {
 
 async function writeDataFile(data) {
   const filePath = getDataFilePath();
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+  const safeData = {
+    stones: Array.isArray(data?.stones) ? data.stones : [],
+    stoneTypes: Array.isArray(data?.stoneTypes) ? data.stoneTypes : ['Granite', 'Marble', 'Limestone'],
+    settings: data?.settings && typeof data.settings === 'object' ? data.settings : {},
+  };
+  const temporaryPath = `${filePath}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(safeData, null, 2), 'utf-8');
+  await fs.rename(temporaryPath, filePath);
   return { success: true };
 }
 
@@ -56,7 +63,11 @@ function createWindow() {
 }
 
 ipcMain.handle('data:load', readDataFile);
-ipcMain.handle('data:save', async (_event, data) => writeDataFile(data));
+let saveQueue = Promise.resolve();
+ipcMain.handle('data:save', async (_event, data) => {
+  saveQueue = saveQueue.catch(() => undefined).then(() => writeDataFile(data));
+  return saveQueue;
+});
 
 app.whenReady().then(createWindow);
 
