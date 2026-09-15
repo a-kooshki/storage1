@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: 'Vazirmatn', 'Tahoma', 'Segoe UI', Arial, sans-serif;
+  background: #111827;
+  color: #f9fafb;
+  direction: rtl;
+}
+
+* {
+  font-family: inherit;
+}
